@@ -34,7 +34,7 @@ class ConnectionSingleton {
 	public static Connection getConnection() throws SQLException {
 		String url = "jdbc:mysql://127.0.0.1:3307/pacientesJDBC";
 		String user = "alumno";
-		String password = "&Alumno2007";
+		String password = "alumno";
 		if (con == null || con.isClosed()) {
 			con = DriverManager.getConnection(url, user, password);
 		}
