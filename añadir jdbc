@@ -1,0 +1,397 @@
+--cancion--
+
+private JPanel buildCancionPanel() {
+    JPanel panel = new JPanel(new BorderLayout(8, 8));
+    panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+    // Tabla
+    String[] cols = {"ID", "Título", "Duración (seg)"};
+    DefaultTableModel model = new DefaultTableModel(cols, 0) {
+        public boolean isCellEditable(int r, int c) { return false; }
+    };
+    JTable table = new JTable(model);
+    table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    JScrollPane scroll = new JScrollPane(table);
+
+    // Filtro
+    JComboBox<String> filtroBox = new JComboBox<>(
+            new String[]{"Todas", "Cortas (< 3 min)", "Largas (> 3 min)"});
+
+    // Campos
+    JTextField txtId     = new JTextField(); txtId.setEditable(false);
+    JTextField txtTitulo = new JTextField();
+    JSpinner   spnMin    = new JSpinner(new SpinnerNumberModel(0, 0, 99, 1));
+    JSpinner   spnSeg    = new JSpinner(new SpinnerNumberModel(0, 0, 59, 1));
+
+    JLabel lblInfo = new JLabel(" ");
+
+    // Botones
+    JButton btnNuevo    = new JButton("Nuevo");
+    JButton btnGuardar  = new JButton("Guardar");
+    JButton btnEliminar = new JButton("Eliminar");
+    JButton btnRefresh  = new JButton("Refrescar");
+
+    // Formulario
+    JPanel form = new JPanel(new GridBagLayout());
+    GridBagConstraints g = new GridBagConstraints();
+    g.insets = new Insets(4, 4, 4, 4);
+    g.fill   = GridBagConstraints.HORIZONTAL;
+
+    int row = 0;
+    addFormRow(form, g, row++, "ID:",     txtId);
+    addFormRow(form, g, row++, "Título:", txtTitulo);
+
+    g.gridx = 0; g.gridy = row; g.gridwidth = 1;
+    form.add(new JLabel("Duración:"), g);
+    g.gridx = 1;
+    JPanel durPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+    durPanel.add(spnMin); durPanel.add(new JLabel("min"));
+    durPanel.add(spnSeg); durPanel.add(new JLabel("seg"));
+    g.gridwidth = 2; form.add(durPanel, g); row++;
+
+    g.gridx = 0; g.gridy = row; g.gridwidth = 1;
+    form.add(new JLabel("Filtro:"), g);
+    g.gridx = 1; g.gridwidth = 2; form.add(filtroBox, g); row++;
+
+    JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    btnPanel.add(btnNuevo); btnPanel.add(btnGuardar);
+    btnPanel.add(btnEliminar); btnPanel.add(btnRefresh);
+    g.gridx = 0; g.gridy = row; g.gridwidth = 3; form.add(btnPanel, g); row++;
+    g.gridx = 0; g.gridy = row; g.gridwidth = 3; form.add(lblInfo, g);
+
+    panel.add(scroll, BorderLayout.CENTER);
+    panel.add(form, BorderLayout.SOUTH);
+
+    // Lógica
+    Runnable loadTable = () -> {
+        model.setRowCount(0);
+        int filtro = filtroBox.getSelectedIndex(); // 0=todas, 1=cortas, 2=largas
+        String sql = "SELECT id, titulo, duracion FROM cancion";
+        if (filtro == 1) sql += " WHERE duracion < 180";
+        if (filtro == 2) sql += " WHERE duracion > 180";
+        try (Statement st = getConnection().createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next())
+                model.addRow(new Object[]{rs.getInt(1), rs.getString(2), rs.getInt(3)});
+        } catch (SQLException ex) { error(ex); }
+    };
+
+    Runnable clearForm = () -> {
+        txtId.setText("");
+        txtTitulo.setText("");
+        spnMin.setValue(0);
+        spnSeg.setValue(0);
+        table.clearSelection();
+    };
+
+    // Al seleccionar fila → rellena campos
+    table.getSelectionModel().addListSelectionListener(e -> {
+        if (e.getValueIsAdjusting()) return;
+        int sel = table.getSelectedRow();
+        if (sel < 0) return;
+        txtId.setText(model.getValueAt(sel, 0).toString());
+        txtTitulo.setText(model.getValueAt(sel, 1).toString());
+        int totalSeg = (int) model.getValueAt(sel, 2);
+        spnMin.setValue(totalSeg / 60);
+        spnSeg.setValue(totalSeg % 60);
+    });
+
+    btnNuevo.addActionListener(e -> clearForm.run());
+
+    btnGuardar.addActionListener(e -> {
+        String titulo = txtTitulo.getText().trim();
+        if (titulo.isEmpty()) { JOptionPane.showMessageDialog(panel, "El título no puede estar vacío."); return; }
+        int dur = (int) spnMin.getValue() * 60 + (int) spnSeg.getValue();
+        if (dur <= 0) { JOptionPane.showMessageDialog(panel, "La duración debe ser mayor que 0."); return; }
+        try {
+            if (txtId.getText().isEmpty()) {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "INSERT INTO cancion (titulo, duracion) VALUES (?,?)");
+                ps.setString(1, titulo); ps.setInt(2, dur); ps.executeUpdate(); ps.close();
+            } else {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "UPDATE cancion SET titulo=?, duracion=? WHERE id=?");
+                ps.setString(1, titulo); ps.setInt(2, dur);
+                ps.setInt(3, Integer.parseInt(txtId.getText())); ps.executeUpdate(); ps.close();
+            }
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnEliminar.addActionListener(e -> {
+        if (txtId.getText().isEmpty()) return;
+        if (JOptionPane.showConfirmDialog(panel, "¿Eliminar canción?") != JOptionPane.YES_OPTION) return;
+        try {
+            PreparedStatement ps = getConnection().prepareStatement("DELETE FROM cancion WHERE id=?");
+            ps.setInt(1, Integer.parseInt(txtId.getText())); ps.executeUpdate(); ps.close();
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnRefresh.addActionListener(e -> loadTable.run());
+    filtroBox.addActionListener(e -> loadTable.run());
+
+    SwingUtilities.invokeLater(loadTable::run);
+    return panel;
+}
+
+--edificio--
+
+private JPanel buildEdificioPanel() {
+    JPanel panel = new JPanel(new BorderLayout(8, 8));
+    panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+    String[] cols = {"ID", "Nº Viviendas", "Año Edificación", "Rehabilitado"};
+    DefaultTableModel model = new DefaultTableModel(cols, 0) {
+        public boolean isCellEditable(int r, int c) { return false; }
+    };
+    JTable table = new JTable(model);
+    table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    JScrollPane scroll = new JScrollPane(table);
+
+    JTextField txtId        = new JTextField(); txtId.setEditable(false);
+    JTextField txtViviendas = new JTextField();
+    JTextField txtAnio      = new JTextField();
+    JCheckBox  chkRehab     = new JCheckBox("Rehabilitado");
+
+    JButton btnNuevo    = new JButton("Nuevo");
+    JButton btnGuardar  = new JButton("Guardar");
+    JButton btnEliminar = new JButton("Eliminar");
+    JButton btnRefresh  = new JButton("Refrescar");
+
+    JPanel form = new JPanel(new GridBagLayout());
+    GridBagConstraints g = new GridBagConstraints();
+    g.insets = new Insets(4, 4, 4, 4); g.fill = GridBagConstraints.HORIZONTAL;
+    int row = 0;
+    addFormRow(form, g, row++, "ID:",              txtId);
+    addFormRow(form, g, row++, "Nº Viviendas:",    txtViviendas);
+    addFormRow(form, g, row++, "Año Edificación:", txtAnio);
+    g.gridx = 1; g.gridy = row++; g.gridwidth = 2; form.add(chkRehab, g);
+
+    JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    btnPanel.add(btnNuevo); btnPanel.add(btnGuardar);
+    btnPanel.add(btnEliminar); btnPanel.add(btnRefresh);
+    g.gridx = 0; g.gridy = row; g.gridwidth = 3; form.add(btnPanel, g);
+
+    panel.add(scroll, BorderLayout.CENTER);
+    panel.add(form, BorderLayout.SOUTH);
+
+    Runnable loadTable = () -> {
+        model.setRowCount(0);
+        try (Statement st = getConnection().createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT id,num_viviendas,anio_edificacion,rehabilitado FROM edificio")) {
+            while (rs.next())
+                model.addRow(new Object[]{rs.getInt(1), rs.getInt(2), rs.getInt(3),
+                        rs.getBoolean(4) ? "Sí" : "No"});
+        } catch (SQLException ex) { error(ex); }
+    };
+
+    Runnable clearForm = () -> {
+        txtId.setText(""); txtViviendas.setText(""); txtAnio.setText("");
+        chkRehab.setSelected(false); table.clearSelection();
+    };
+
+    // Al seleccionar fila → rellena campos
+    table.getSelectionModel().addListSelectionListener(e -> {
+        if (e.getValueIsAdjusting()) return;
+        int sel = table.getSelectedRow();
+        if (sel < 0) return;
+        txtId.setText(model.getValueAt(sel, 0).toString());
+        txtViviendas.setText(model.getValueAt(sel, 1).toString());
+        txtAnio.setText(model.getValueAt(sel, 2).toString());
+        chkRehab.setSelected("Sí".equals(model.getValueAt(sel, 3)));
+    });
+
+    btnNuevo.addActionListener(e -> clearForm.run());
+
+    btnGuardar.addActionListener(e -> {
+        int viviendas, anio;
+        try {
+            viviendas = Integer.parseInt(txtViviendas.getText().trim());
+            if (viviendas <= 0) throw new NumberFormatException();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(panel, "El nº de viviendas debe ser un entero positivo."); return;
+        }
+        try {
+            anio = Integer.parseInt(txtAnio.getText().trim());
+            if (anio <= 1900) throw new NumberFormatException();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(panel, "El año debe ser un entero posterior a 1900."); return;
+        }
+        boolean rehab = chkRehab.isSelected();
+        try {
+            if (txtId.getText().isEmpty()) {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "INSERT INTO edificio (num_viviendas,anio_edificacion,rehabilitado) VALUES (?,?,?)");
+                ps.setInt(1, viviendas); ps.setInt(2, anio); ps.setBoolean(3, rehab);
+                ps.executeUpdate(); ps.close();
+            } else {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "UPDATE edificio SET num_viviendas=?,anio_edificacion=?,rehabilitado=? WHERE id=?");
+                ps.setInt(1, viviendas); ps.setInt(2, anio); ps.setBoolean(3, rehab);
+                ps.setInt(4, Integer.parseInt(txtId.getText())); ps.executeUpdate(); ps.close();
+            }
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnEliminar.addActionListener(e -> {
+        if (txtId.getText().isEmpty()) return;
+        if (JOptionPane.showConfirmDialog(panel, "¿Eliminar edificio?") != JOptionPane.YES_OPTION) return;
+        try {
+            PreparedStatement ps = getConnection().prepareStatement("DELETE FROM edificio WHERE id=?");
+            ps.setInt(1, Integer.parseInt(txtId.getText())); ps.executeUpdate(); ps.close();
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnRefresh.addActionListener(e -> loadTable.run());
+    SwingUtilities.invokeLater(loadTable::run);
+    return panel;
+}
+
+--ordenador--
+
+private JPanel buildOrdenadorPanel() {
+    JPanel panel = new JPanel(new BorderLayout(8, 8));
+    panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+    String[] cols = {"ID", "RAM (GB)", "Disco (GB)", "Puertos USB", "Precio (€)", "Unidades"};
+    DefaultTableModel model = new DefaultTableModel(cols, 0) {
+        public boolean isCellEditable(int r, int c) { return false; }
+    };
+    JTable table = new JTable(model);
+    table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    JScrollPane scroll = new JScrollPane(table);
+
+    JTextField txtId         = new JTextField(); txtId.setEditable(false);
+    JComboBox<Integer> cbRam = new JComboBox<>(new Integer[]{1,2,4,8,16,32,64,128,256});
+    JTextField txtDisco      = new JTextField();
+    JTextField txtUsb        = new JTextField();
+    JTextField txtPrecio     = new JTextField();
+    JTextField txtUnits      = new JTextField();
+
+    // Estadísticas en tiempo real
+    JLabel lblTotal    = new JLabel("Total ordenadores: 0");
+    JLabel lblGanancia = new JLabel("Ganancia si vende todo: 0,00 €");
+
+    JButton btnNuevo    = new JButton("Nuevo");
+    JButton btnGuardar  = new JButton("Guardar");
+    JButton btnEliminar = new JButton("Eliminar");
+    JButton btnRefresh  = new JButton("Refrescar");
+
+    JPanel form = new JPanel(new GridBagLayout());
+    GridBagConstraints g = new GridBagConstraints();
+    g.insets = new Insets(4, 4, 4, 4); g.fill = GridBagConstraints.HORIZONTAL;
+    int row = 0;
+    addFormRow(form, g, row++, "ID:",          txtId);
+    addFormRow(form, g, row++, "RAM (GB):",    cbRam);
+    addFormRow(form, g, row++, "Disco (GB):",  txtDisco);
+    addFormRow(form, g, row++, "Puertos USB:", txtUsb);
+    addFormRow(form, g, row++, "Precio (€):",  txtPrecio);
+    addFormRow(form, g, row++, "Unidades:",    txtUnits);
+
+    JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+    btnPanel.add(btnNuevo); btnPanel.add(btnGuardar);
+    btnPanel.add(btnEliminar); btnPanel.add(btnRefresh);
+    g.gridx = 0; g.gridy = row; g.gridwidth = 3; form.add(btnPanel, g); row++;
+    g.gridy = row++; form.add(lblTotal, g);
+    g.gridy = row;   form.add(lblGanancia, g);
+
+    panel.add(scroll, BorderLayout.CENTER);
+    panel.add(form, BorderLayout.SOUTH);
+
+    // Se recalcula tras cada operación
+    Runnable updateStats = () -> {
+        try (Statement st = getConnection().createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT SUM(unidades), SUM(precio*unidades) FROM ordenador")) {
+            if (rs.next()) {
+                lblTotal.setText("Total ordenadores: " + rs.getInt(1));
+                lblGanancia.setText(String.format("Ganancia si vende todo: %.2f €", rs.getDouble(2)));
+            }
+        } catch (SQLException ex) { error(ex); }
+    };
+
+    Runnable loadTable = () -> {
+        model.setRowCount(0);
+        try (Statement st = getConnection().createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT id,ram,disco,puertos_usb,precio,unidades FROM ordenador")) {
+            while (rs.next())
+                model.addRow(new Object[]{
+                        rs.getInt(1), rs.getInt(2), rs.getInt(3),
+                        rs.getInt(4), rs.getDouble(5), rs.getInt(6)});
+        } catch (SQLException ex) { error(ex); }
+        updateStats.run();
+    };
+
+    Runnable clearForm = () -> {
+        txtId.setText(""); cbRam.setSelectedIndex(3);
+        txtDisco.setText(""); txtUsb.setText("");
+        txtPrecio.setText(""); txtUnits.setText("");
+        table.clearSelection();
+    };
+
+    // Al seleccionar fila → rellena campos
+    table.getSelectionModel().addListSelectionListener(e -> {
+        if (e.getValueIsAdjusting()) return;
+        int sel = table.getSelectedRow();
+        if (sel < 0) return;
+        txtId.setText(model.getValueAt(sel, 0).toString());
+        cbRam.setSelectedItem((int)(Integer) model.getValueAt(sel, 1));
+        txtDisco.setText(model.getValueAt(sel, 2).toString());
+        txtUsb.setText(model.getValueAt(sel, 3).toString());
+        txtPrecio.setText(model.getValueAt(sel, 4).toString());
+        txtUnits.setText(model.getValueAt(sel, 5).toString());
+    });
+
+    btnNuevo.addActionListener(e -> clearForm.run());
+
+    btnGuardar.addActionListener(e -> {
+        int ram = (int) cbRam.getSelectedItem();
+        int disco, usb, units;
+        double precio;
+        try { disco = Integer.parseInt(txtDisco.getText().trim()); if (disco <= 0) throw new NumberFormatException(); }
+        catch (NumberFormatException ex) { JOptionPane.showMessageDialog(panel, "Disco debe ser entero positivo."); return; }
+        try { usb = Integer.parseInt(txtUsb.getText().trim()); if (usb < 0) throw new NumberFormatException(); }
+        catch (NumberFormatException ex) { JOptionPane.showMessageDialog(panel, "Puertos USB debe ser entero >= 0."); return; }
+        try { precio = Double.parseDouble(txtPrecio.getText().trim().replace(",",".")); if (precio < 0) throw new NumberFormatException(); }
+        catch (NumberFormatException ex) { JOptionPane.showMessageDialog(panel, "Precio debe ser número >= 0."); return; }
+        try { units = Integer.parseInt(txtUnits.getText().trim()); if (units < 0) throw new NumberFormatException(); }
+        catch (NumberFormatException ex) { JOptionPane.showMessageDialog(panel, "Unidades debe ser entero >= 0."); return; }
+
+        try {
+            if (txtId.getText().isEmpty()) {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "INSERT INTO ordenador (ram,disco,puertos_usb,precio,unidades) VALUES (?,?,?,?,?)");
+                ps.setInt(1,ram); ps.setInt(2,disco); ps.setInt(3,usb);
+                ps.setDouble(4,precio); ps.setInt(5,units);
+                ps.executeUpdate(); ps.close();
+            } else {
+                PreparedStatement ps = getConnection().prepareStatement(
+                        "UPDATE ordenador SET ram=?,disco=?,puertos_usb=?,precio=?,unidades=? WHERE id=?");
+                ps.setInt(1,ram); ps.setInt(2,disco); ps.setInt(3,usb);
+                ps.setDouble(4,precio); ps.setInt(5,units);
+                ps.setInt(6, Integer.parseInt(txtId.getText()));
+                ps.executeUpdate(); ps.close();
+            }
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnEliminar.addActionListener(e -> {
+        if (txtId.getText().isEmpty()) return;
+        if (JOptionPane.showConfirmDialog(panel, "¿Eliminar ordenador?") != JOptionPane.YES_OPTION) return;
+        try {
+            PreparedStatement ps = getConnection().prepareStatement("DELETE FROM ordenador WHERE id=?");
+            ps.setInt(1, Integer.parseInt(txtId.getText())); ps.executeUpdate(); ps.close();
+            loadTable.run(); clearForm.run();
+        } catch (SQLException ex) { error(ex); }
+    });
+
+    btnRefresh.addActionListener(e -> loadTable.run());
+    SwingUtilities.invokeLater(loadTable::run);
+    return panel;
+}
